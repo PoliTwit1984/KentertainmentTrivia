@@ -1,7 +1,8 @@
 import pytest
 import jwt
-from datetime import datetime, timedelta
-from app import app, hosts
+from datetime import datetime, timedelta, UTC
+from app import app
+from shared.cosmosdb import CosmosDB
 
 @pytest.fixture
 def client():
@@ -84,7 +85,7 @@ def test_verify_valid_token(client, auth_headers):
 def test_verify_invalid_token(client):
     """Test token verification with invalid token."""
     invalid_token = jwt.encode(
-        {'host_id': 'fake_id', 'exp': datetime.utcnow() + timedelta(hours=1)},
+        {'host_id': 'fake_id', 'exp': datetime.now(UTC) + timedelta(hours=1)},
         'wrong_secret',
         algorithm='HS256'
     )
@@ -96,7 +97,7 @@ def test_verify_invalid_token(client):
 def test_verify_expired_token(client):
     """Test token verification with expired token."""
     expired_token = jwt.encode(
-        {'host_id': 'fake_id', 'exp': datetime.utcnow() - timedelta(hours=1)},
+        {'host_id': 'fake_id', 'exp': datetime.now(UTC) - timedelta(hours=1)},
         app.config['JWT_SECRET_KEY'],
         algorithm='HS256'
     )
@@ -111,6 +112,39 @@ def test_missing_credentials(client):
     assert response.status_code == 400
     assert 'error' in response.json
 
-def test_clear_test_data():
-    """Clear test data after tests."""
-    hosts.clear()
+@pytest.fixture(autouse=True)
+def cleanup():
+    """Clean up test data before and after each test."""
+    # Clean up before test
+    db = CosmosDB()
+    try:
+        # Delete test hosts
+        test_emails = [
+            'test@example.com',
+            'host@example.com',
+            'duplicate@example.com',
+            'login@example.com'
+        ]
+        for email in test_emails:
+            host = db.get_host_by_email(email)
+            if host:
+                db.container.delete_item(
+                    item=host['id'],
+                    partition_key='host'
+                )
+    except Exception as e:
+        print(f"Error during cleanup: {str(e)}")
+
+    yield  # Run test
+
+    # Clean up after test
+    try:
+        for email in test_emails:
+            host = db.get_host_by_email(email)
+            if host:
+                db.container.delete_item(
+                    item=host['id'],
+                    partition_key='host'
+                )
+    except Exception as e:
+        print(f"Error during cleanup: {str(e)}")

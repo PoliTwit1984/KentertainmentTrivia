@@ -1,116 +1,142 @@
+import pytest
 import requests
 import socketio
 import time
 import json
+import os
+import asyncio
+from contextlib import asynccontextmanager
 
 # Test configuration
-AUTH_SERVICE = 'http://localhost:5001'
-GAME_SERVICE = 'http://localhost:5002'
+AUTH_SERVICE = os.getenv('AUTH_SERVICE_URL', 'http://localhost:5001')
+GAME_SERVICE = os.getenv('GAME_SERVICE_URL', 'http://localhost:5002')
 
-def test_host_flow():
-    print("\n=== Testing Host Flow ===")
+# Test fixtures
+@pytest.fixture(scope="module")
+def event_loop():
+    """Create an instance of the default event loop for the test module."""
+    loop = asyncio.get_event_loop_policy().new_event_loop()
+    yield loop
+    loop.close()
 
-    # 1. Register host
-    print("\n1. Registering host...")
+@pytest.fixture(scope="module")
+async def auth_token():
+    """Get authentication token for tests."""
+    register_data = {
+        "email": f"test_{int(time.time())}@example.com",
+        "password": "test123"
+    }
+
+    # Register new host
     register_response = requests.post(
         f"{AUTH_SERVICE}/host/register",
-        json={
-            "email": "test@example.com",
-            "password": "test123"
-        }
+        json=register_data
     )
-    print(f"Register Response: {register_response.status_code}")
-    print(register_response.json())
+    assert register_response.status_code == 201
 
-    # 2. Login host
-    print("\n2. Logging in host...")
+    # Login and get token
     login_response = requests.post(
         f"{AUTH_SERVICE}/host/login",
-        json={
-            "email": "test@example.com",
-            "password": "test123"
-        }
+        json=register_data
     )
-    print(f"Login Response: {login_response.status_code}")
-    print(login_response.json())
+    assert login_response.status_code == 200
+    return login_response.json()['token']
 
-    token = login_response.json().get('token')
-
-    # 3. Create game
-    print("\n3. Creating game...")
-    create_game_response = requests.post(
+@pytest.fixture(scope="module")
+async def game_pin(auth_token):
+    """Create a game and return its PIN."""
+    create_response = requests.post(
         f"{GAME_SERVICE}/game/create",
-        headers={'Authorization': f'Bearer {token}'}
+        headers={'Authorization': f'Bearer {auth_token}'}
     )
-    print(f"Create Game Response: {create_game_response.status_code}")
-    print(create_game_response.json())
+    assert create_response.status_code == 200
+    return create_response.json()['pin']
 
-    game_pin = create_game_response.json().get('pin')
-    return token, game_pin
+@pytest.fixture
+async def socket_client():
+    """Create and yield a socket client, then cleanup."""
+    sio = socketio.AsyncClient()
+    yield sio
+    if sio.connected:
+        await sio.disconnect()
 
-def test_player_flow(game_pin):
-    print("\n=== Testing Player Flow ===")
+@pytest.mark.asyncio
+async def test_host_flow(auth_token):
+    """Test host authentication and game creation flow."""
+    assert auth_token, "Authentication token should be valid"
 
-    # Initialize Socket.IO client
-    sio = socketio.Client()
+    # Verify token is valid
+    verify_response = requests.post(
+        f"{AUTH_SERVICE}/host/verify",
+        headers={'Authorization': f'Bearer {auth_token}'}
+    )
+    assert verify_response.status_code == 200
+    assert verify_response.json()['valid'] is True
 
-    @sio.event
+@pytest.mark.asyncio
+async def test_player_flow(game_pin, socket_client):
+    """Test player connection and game interaction flow."""
+    assert game_pin, "Game PIN should be valid"
+
+    # Set up event handlers
+    events_received = []
+
+    @socket_client.event
     def connect():
-        print("\nConnected to game service")
+        events_received.append('connect')
 
-    @sio.event
+    @socket_client.event
     def disconnect():
-        print("\nDisconnected from game service")
+        events_received.append('disconnect')
 
-    @sio.on('player_joined')
+    @socket_client.on('player_joined')
     def on_player_joined(data):
-        print(f"\nPlayer joined event: {data}")
+        events_received.append(('player_joined', data))
 
-    @sio.on('game_started')
+    @socket_client.on('game_started')
     def on_game_started(data):
-        print(f"\nGame started event: {data}")
+        events_received.append(('game_started', data))
 
     # Connect to game service
-    print("\n1. Connecting to game service...")
-    sio.connect(GAME_SERVICE)
+    await socket_client.connect(GAME_SERVICE)
+    assert 'connect' in events_received
 
     # Join game
-    print(f"\n2. Joining game with PIN {game_pin}...")
-    # Join game with callback
-    def on_join_response(data):
-        print(f"Join Response: {data}")
-
-    sio.emit('join_game', {
+    await socket_client.emit('join_game', {
         'pin': game_pin,
         'name': 'Test Player'
-    }, callback=on_join_response)
+    })
 
-    return sio
+    # Wait for join confirmation
+    await asyncio.sleep(1)
+    assert any(event[0] == 'player_joined' for event in events_received if isinstance(event, tuple))
 
-def main():
-    print("Waiting for services to start...")
-    time.sleep(10)  # Give services time to start
-    try:
-        # Test host flow
-        token, game_pin = test_host_flow()
+@pytest.mark.asyncio
+async def test_game_status(game_pin):
+    """Test game status endpoint."""
+    status_response = requests.get(f"{GAME_SERVICE}/game/{game_pin}/status")
+    assert status_response.status_code == 200
 
-        # Check game status
-        print("\n=== Checking Game Status ===")
-        status_response = requests.get(f"{GAME_SERVICE}/game/{game_pin}/status")
-        print(f"Status Response: {status_response.status_code}")
-        print(status_response.json())
+    status_data = status_response.json()
+    assert status_data['status'] in ['lobby', 'active']
+    assert isinstance(status_data['player_count'], int)
+    assert isinstance(status_data['players'], list)
 
-        # Test player flow
-        sio = test_player_flow(game_pin)
+@pytest.mark.asyncio
+async def test_error_handling():
+    """Test error handling for invalid game operations."""
+    # Test joining non-existent game
+    sio = socketio.AsyncClient()
+    await sio.connect(GAME_SERVICE)
 
-        # Keep connection alive briefly to see events
-        time.sleep(5)  # Give more time to see all events
+    with pytest.raises(Exception):
+        await sio.emit('join_game', {
+            'pin': '000000',
+            'name': 'Test Player'
+        })
 
-        # Cleanup
-        sio.disconnect()
+    await sio.disconnect()
 
-    except Exception as e:
-        print(f"\nError during testing: {e}")
-
-if __name__ == "__main__":
-    main()
+    # Test invalid game status
+    response = requests.get(f"{GAME_SERVICE}/game/000000/status")
+    assert response.status_code == 404

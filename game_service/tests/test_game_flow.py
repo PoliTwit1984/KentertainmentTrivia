@@ -1,39 +1,53 @@
 """Test game flow scenarios and edge cases."""
 import pytest
-from unittest.mock import patch
+import asyncio
+from unittest.mock import patch, AsyncMock
 import sys
 import os
 from datetime import datetime, timezone, timedelta
-from gevent import sleep
+from contextlib import asynccontextmanager
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app import app, socketio, games, active_players, handle_question_end
 
+# Constants for test configuration
+TEST_TIMEOUT = 5  # seconds
 
-@pytest.fixture(autouse=True)
-def setup_and_teardown():
+
+@pytest.fixture(scope="function", autouse=True)
+async def setup_and_teardown():
     """Setup and teardown for each test."""
+    # Setup
     games.clear()
     active_players.clear()
+
     yield
+
+    # Teardown
+    await asyncio.sleep(0.1)  # Allow any pending events to complete
     games.clear()
     active_players.clear()
 
 
 @pytest.fixture
-def socket_client():
+async def socket_client():
+    """Create an async socket client for testing."""
     app.config["TESTING"] = True
-    client = socketio.test_client(app)
-    return client
+    client = socketio.AsyncClient()
+    await client.connect(f'http://{app.config["HOST"]}:{app.config["PORT"]}')
+    yield client
+    if client.connected:
+        await client.disconnect()
 
 
-def test_question_timer_expiration(socket_client):
+@pytest.mark.asyncio
+async def test_question_timer_expiration(socket_client):
     """Test behavior when question timer expires."""
-    print("\n=== Testing Question Timer Expiration ===")
 
     # Create a game with an active question
     current_time = datetime.now(timezone.utc).timestamp()
-    games["123456"] = {
+    game_pin = "123456"
+    games[game_pin] = {
         "pin": "123456",
         "host_id": "test_host_123",
         "status": "question",
@@ -59,19 +73,27 @@ def test_question_timer_expiration(socket_client):
         "max_players": 12
     }
 
-    # Handle question end
-    handle_question_end("123456")
+    try:
+        # Handle question end
+        await asyncio.wait_for(
+            handle_question_end(game_pin),
+            timeout=TEST_TIMEOUT
+        )
 
-    # Verify scores were calculated correctly
-    game = games["123456"]
-    assert game["scores"]["player_1"] > game["scores"]["player_2"]  # Fast answer scores more
-    assert game["scores"]["player_3"] == 0  # No answer gets no points
-    assert game["streaks"]["player_3"] == 0  # No answer breaks streak
+        # Verify scores were calculated correctly
+        game = games[game_pin]
+        assert game["scores"]["player_1"] > game["scores"]["player_2"]  # Fast answer scores more
+        assert game["scores"]["player_3"] == 0  # No answer gets no points
+        assert game["streaks"]["player_3"] == 0  # No answer breaks streak
+    except asyncio.TimeoutError:
+        pytest.fail("Question end handling timed out")
+    except Exception as e:
+        pytest.fail(f"Test failed: {str(e)}")
 
 
-def test_score_calculation_edge_cases(socket_client):
+@pytest.mark.asyncio
+async def test_score_calculation_edge_cases(socket_client):
     """Test edge cases in score calculation."""
-    print("\n=== Testing Score Calculation Edge Cases ===")
 
     current_time = datetime.now(timezone.utc).timestamp()
     games["123456"] = {
@@ -100,21 +122,29 @@ def test_score_calculation_edge_cases(socket_client):
         "max_players": 12
     }
 
-    # Handle question end
-    handle_question_end("123456")
+    try:
+        # Handle question end
+        await asyncio.wait_for(
+            handle_question_end("123456"),
+            timeout=TEST_TIMEOUT
+        )
 
-    # Verify edge case handling
-    game = games["123456"]
-    assert game["scores"]["player_1"] > game["scores"]["player_2"]  # Fast answer bonus
-    assert game["scores"]["player_3"] == 0  # Invalid time gets no points
-    assert game["streaks"]["player_1"] == 6  # Maintain long streak
-    assert game["streaks"]["player_2"] == 1  # Start new streak
-    assert game["streaks"]["player_3"] == 0  # Invalid answer breaks streak
+        # Verify edge case handling
+        game = games["123456"]
+        assert game["scores"]["player_1"] > game["scores"]["player_2"]  # Fast answer bonus
+        assert game["scores"]["player_3"] == 0  # Invalid time gets no points
+        assert game["streaks"]["player_1"] == 6  # Maintain long streak
+        assert game["streaks"]["player_2"] == 1  # Start new streak
+        assert game["streaks"]["player_3"] == 0  # Invalid answer breaks streak
+    except asyncio.TimeoutError:
+        pytest.fail("Question end handling timed out")
+    except Exception as e:
+        pytest.fail(f"Test failed: {str(e)}")
 
 
-def test_streak_bonus_calculations():
+@pytest.mark.asyncio
+async def test_streak_bonus_calculations():
     """Test streak bonus calculations in various scenarios."""
-    print("\n=== Testing Streak Bonus Calculations ===")
 
     current_time = datetime.now(timezone.utc).timestamp()
     games["123456"] = {
@@ -143,31 +173,42 @@ def test_streak_bonus_calculations():
         "max_players": 12
     }
 
-    # Handle first question to establish initial state
-    handle_question_end("123456")
+    try:
+        # Handle first question to establish initial state
+        await asyncio.wait_for(
+            handle_question_end("123456"),
+            timeout=TEST_TIMEOUT
+        )
 
-    # Verify initial state
-    game = games["123456"]
-    assert game["streaks"]["player_1"] == 10  # Extended streak
-    assert game["streaks"]["player_2"] == 0   # Broken streak
-    assert game["streaks"]["player_3"] == 1   # Started streak
+        # Verify initial state
+        game = games["123456"]
+        assert game["streaks"]["player_1"] == 10  # Extended streak
+        assert game["streaks"]["player_2"] == 0   # Broken streak
+        assert game["streaks"]["player_3"] == 1   # Started streak
 
-    # Run two more questions with all correct answers
-    for i in range(2):
-        # Reset game state for next question
-        game["status"] = "question"
-        game["current_question"] = {
-            "text": f"Question {i+2}?",
-            "options": ["A", "B", "C", "D"],
-            "correct_answer": "A"
-        }
-        game["question_start_time"] = datetime.now(timezone.utc).timestamp()
-        game["answers"] = {
-            "player_1": {"answer": "A", "time_taken": 5},  # Maintains streak
-            "player_2": {"answer": "A", "time_taken": 5},  # Rebuilds streak
-            "player_3": {"answer": "A", "time_taken": 5}   # Builds streak
-        }
-        handle_question_end("123456")
+        # Run two more questions with all correct answers
+        for i in range(2):
+            # Reset game state for next question
+            game["status"] = "question"
+            game["current_question"] = {
+                "text": f"Question {i+2}?",
+                "options": ["A", "B", "C", "D"],
+                "correct_answer": "A"
+            }
+            game["question_start_time"] = datetime.now(timezone.utc).timestamp()
+            game["answers"] = {
+                "player_1": {"answer": "A", "time_taken": 5},  # Maintains streak
+                "player_2": {"answer": "A", "time_taken": 5},  # Rebuilds streak
+                "player_3": {"answer": "A", "time_taken": 5}   # Builds streak
+            }
+            await asyncio.wait_for(
+                handle_question_end("123456"),
+                timeout=TEST_TIMEOUT
+            )
+    except asyncio.TimeoutError:
+        pytest.fail("Question end handling timed out")
+    except Exception as e:
+        pytest.fail(f"Test failed: {str(e)}")
 
     # Verify final streak calculations
     assert game["streaks"]["player_1"] == 12  # Extended streak further
@@ -187,9 +228,9 @@ def test_streak_bonus_calculations():
     assert final_gaps["p1_p2"] > initial_gaps["p1_p2"]
 
 
-def test_player_disconnection_scenarios(socket_client):
+@pytest.mark.asyncio
+async def test_player_disconnection_scenarios(socket_client):
     """Test handling of player disconnections during different game phases."""
-    print("\n=== Testing Player Disconnection Scenarios ===")
 
     # Setup game with multiple players
     games["123456"] = {
@@ -228,8 +269,8 @@ def test_player_disconnection_scenarios(socket_client):
     player_2_data = games["123456"]["players"]["player_2"]
 
     # Simulate player_2 disconnection
-    socket_client.disconnect()  # Proper disconnect event
-    sleep(0.1)  # Wait for disconnect to process
+    await socket_client.disconnect()
+    await asyncio.sleep(0.1)  # Short wait for disconnect processing
 
     # Verify disconnected player handling
     assert "player_2" not in games["123456"]["players"]
@@ -249,7 +290,7 @@ def test_player_disconnection_scenarios(socket_client):
     assert len(player_left_events) > 0
 
     # Test reconnection
-    socket_client.emit("join_game", {
+    await socket_client.emit("join_game", {
         "pin": "123456",
         "name": "Reconnecting Player",
         "player_id": "player_3"  # Trying to reconnect
@@ -265,17 +306,17 @@ def test_player_disconnection_scenarios(socket_client):
     # Test host disconnection handling
     with patch("app.verify_host_token") as mock:
         mock.return_value = (True, "test_host_123")
-        socket_client.emit("disconnect_request")  # Simulate host disconnect
-        sleep(0.1)  # Wait for disconnect to process
+        await socket_client.emit("disconnect_request")  # Simulate host disconnect
+        await asyncio.sleep(0.1)  # Wait for disconnect to process
 
         # Verify game remains active without host
         assert games["123456"]["status"] != "ended"
         assert len(games["123456"]["players"]) > 0
 
 
-def test_question_progression(socket_client):
+@pytest.mark.asyncio
+async def test_question_progression(socket_client):
     """Test progression through multiple questions with various timing scenarios."""
-    print("\n=== Testing Question Progression ===")
 
     # Setup game
     games["123456"] = {
@@ -326,15 +367,23 @@ def test_question_progression(socket_client):
                 "player_2": {"answer": "B", "time_taken": 5}
             }
 
-        # End question and verify state
-        handle_question_end("123456")
+        try:
+            # End question and verify state
+            await asyncio.wait_for(
+                handle_question_end("123456"),
+                timeout=TEST_TIMEOUT
+            )
 
-        # Verify game state after each round
-        assert games["123456"]["round"] == round_num
-        assert "current_question" in games["123456"]
-        assert "answers" in games["123456"]
+            # Verify game state after each round
+            assert games["123456"]["round"] == round_num
+            assert "current_question" in games["123456"]
+            assert "answers" in games["123456"]
 
-        # Verify score and streak progression
-        if round_num > 1:
-            assert games["123456"]["scores"]["player_1"] > games["123456"]["scores"]["player_2"]
-            assert games["123456"]["streaks"]["player_1"] > games["123456"]["streaks"]["player_2"]
+            # Verify score and streak progression
+            if round_num > 1:
+                assert games["123456"]["scores"]["player_1"] > games["123456"]["scores"]["player_2"]
+                assert games["123456"]["streaks"]["player_1"] > games["123456"]["streaks"]["player_2"]
+        except asyncio.TimeoutError:
+            pytest.fail("Question end handling timed out")
+        except Exception as e:
+            pytest.fail(f"Test failed: {str(e)}")

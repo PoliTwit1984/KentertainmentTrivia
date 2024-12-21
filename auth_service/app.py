@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import jwt
-import datetime
+from datetime import datetime, timedelta, UTC
 import bcrypt
 import os
 import secrets
@@ -18,7 +18,7 @@ db = CosmosDB()
 
 # Configuration
 app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'dev_secret_key')
-app.config['JWT_EXPIRATION_DELTA'] = datetime.timedelta(hours=24)
+app.config['JWT_EXPIRATION_DELTA'] = timedelta(hours=24)
 
 def generate_host_id():
     """Generate a unique host ID."""
@@ -30,7 +30,7 @@ def get_host_data(host_doc):
         'id': host_doc['id'],
         'email': host_doc['email'],
         'password_hash': host_doc['password_hash'].encode('utf-8'),
-        'created_at': host_doc['created_at']
+        'created_at': host_doc.get('created_at', datetime.now(UTC).isoformat())
     }
 
 @app.route('/health', methods=['GET'])
@@ -40,7 +40,7 @@ def health_check():
         'status': 'healthy',
         'version': '1.0.0',
         'service': 'auth',
-        'timestamp': datetime.utcnow().isoformat(),
+        'timestamp': datetime.now(UTC).isoformat(),
         'features': {
             'jwt_auth': True,
             'host_management': True,
@@ -74,7 +74,8 @@ def register_host():
         'id': host_id,
         'email': email,
         'password_hash': hashed_password.decode('utf-8'),  # Store as string in Cosmos DB
-        'type': 'host'  # For Cosmos DB querying
+        'type': 'host',  # For Cosmos DB querying
+        'created_at': datetime.now(UTC).isoformat()
     }
 
     db.create_host(host_data)
@@ -110,7 +111,7 @@ def host_login():
     token_payload = {
         'host_id': host['id'],
         'email': email,
-        'exp': datetime.datetime.utcnow() + app.config['JWT_EXPIRATION_DELTA']
+        'exp': datetime.now(UTC) + app.config['JWT_EXPIRATION_DELTA']
     }
 
     token = jwt.encode(

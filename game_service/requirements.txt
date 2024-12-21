@@ -11,3 +11,4 @@ gevent==24.2.1
 gevent-websocket==0.10.1
 azure-cosmos==4.5.1
 azure-storage-blob==12.17.0
+pyjwt==2.8.0

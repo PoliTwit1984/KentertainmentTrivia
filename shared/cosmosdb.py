@@ -1,3 +1,4 @@
+"""Database operations with Cosmos DB."""
 from azure.cosmos import CosmosClient, PartitionKey, exceptions
 import os
 import random
@@ -110,7 +111,6 @@ class CosmosDB:
 
     def __init__(self):
         """Initialize database connection with transaction support."""
-        """Initialize the database connection if not already initialized."""
         if CosmosDB._client is None:
             endpoint = os.environ.get('COSMOS_ENDPOINT')
             key = os.environ.get('COSMOS_KEY')
@@ -119,12 +119,8 @@ class CosmosDB:
 
             # Initialize Cosmos client with connection pooling
             CosmosDB._client = CosmosClient(
-                endpoint,
-                key,
-                connection_policy={
-                    'MaxPoolSize': 100,
-                    'RequestTimeout': 30  # seconds
-                }
+                url=endpoint,
+                credential=key
             )
 
             # Get or create database
@@ -420,19 +416,7 @@ class CosmosDB:
         question_schema = QuestionSchema()
         for question in questions:
             question_schema.validate(question)
-        """Add questions to a bank with retry logic.
 
-        Args:
-            bank_id: ID of the question bank
-            questions: List of question documents to add
-
-        Returns:
-            Updated question bank document
-
-        Raises:
-            CosmosResourceNotFoundError: If bank not found
-            CosmosHttpResponseError: For other Cosmos DB errors
-        """
         try:
             logger.info(f"Adding questions to bank: {bank_id}")
             bank = self.container.read_item(
