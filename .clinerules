@@ -1,0 +1,772 @@
+# Team Trivia App Project Overview
+
+## Project Vision
+A Kahoot-style real-time trivia game designed specifically for team meetings. The boss hosts weekly trivia sessions in the first 10 minutes of meetings, making it engaging and fun while incorporating company knowledge.
+
+## Tech Stack
+- Backend: Python 3.11+ with Flask
+- Real-time Communication: Flask-SocketIO for WebSocket connections
+- Database: Azure Cosmos DB
+- Container: Docker
+- Frontend: React with TailwindCSS
+- Authentication: JWT for host login
+
+## Authentication Flow
+
+### Host Access
+- Secure login required for hosts
+- Email/password authentication
+- JWT token-based session management
+- Full access to dashboard and game controls
+```python
+@app.route('/host/login', methods=['POST'])
+def host_login():
+    email = request.json.get('email')
+    password = request.json.get('password')
+    # Authenticate and generate JWT
+    token = create_jwt_token(host_id)
+    return jsonify({'token': token})
+```
+
+### Player Access
+- No login required
+- Enter 6-digit game PIN or scan QR code
+- Temporary session for game duration
+```python
+@app.route('/game/join', methods=['POST'])
+def join_game():
+    pin = request.json.get('pin')
+    player_name = request.json.get('name')
+    # Validate PIN and create session
+    return jsonify({'session_id': session_id})
+```
+
+## Core Features
+
+### Game Mechanics
+- Real-time multiplayer (up to 12 players)
+- Score tracking and leaderboards
+- Timed questions with countdown
+- Inter-round smack talk system
+- Question categories and difficulty levels
+
+### Question Sources
+1. External APIs
+   - OpenTDB (general trivia)
+   - Jservice (Jeopardy! questions)
+   - The Trivia API (verified questions)
+   - Unsplash API (image-based questions)
+   - Freesound API (sound effect questions)
+     * Animal sounds, office sounds, weather effects
+     * Simple API key authentication
+     * Short audio clips (0-3 seconds)
+
+2. Company-Specific Content
+   - Azure OpenAI integration for question generation
+   - Supports multiple document types:
+     - PowerPoint presentations
+     - PDF documents
+     - Word documents
+     - Company emails
+
+## Technical Architecture
+
+### Backend Structure
+```python
+app/
+  ├── main.py              # Flask application entry
+  ├── sockets/             # WebSocket event handlers
+  ├── models/              # Data models
+  ├── services/           
+  │   ├── trivia/         # Question sourcing
+  │   ├── game/           # Game logic
+  │   └── cosmosdb/       # Database operations
+  └── utils/              # Helper functions
+```
+
+### Docker Configuration
+```dockerfile
+FROM python:3.11-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+COPY . .
+EXPOSE 5000
+CMD ["python", "main.py"]
+```
+
+### Database Schema (Cosmos DB)
+```javascript
+// Games Collection
+{
+    id: "game_123",
+    pin: "123456",            // 6-digit game PIN
+    hostId: "user_456",
+    status: "active",
+    players: [{
+        id: "user_789",
+        name: "Sarah",
+        score: 150,
+        lastSmackTalk: "Just wait till the tech round! 😎"
+    }],
+    currentQuestion: {
+        text: "Who sent the viral Teams gif in last week's all-hands?",
+        options: [...],
+        source: "company_content"
+    }
+}
+
+// Hosts Collection
+{
+    id: "host_123",
+    email: "boss@company.com",
+    passwordHash: "...",
+    questionBanks: ["bank_1", "bank_2"],
+    savedGames: ["game_1", "game_2"]
+}
+
+// Questions Collection
+{
+    id: "question_123",
+    text: "What feature launched in Q2?",
+    options: ["Feature A", "Feature B", "Feature C", "Feature D"],
+    correctAnswer: 1,
+    category: "company_updates",
+    difficulty: "medium",
+    source: "all_hands_april"
+}
+```
+
+### WebSocket Events
+```python
+# Key WebSocket events
+@socketio.on('join_game')
+def handle_join(data):
+    pin = data['pin']
+    player_name = data['player_name']
+    join_room(pin)
+
+@socketio.on('submit_answer')
+def handle_answer(data):
+    # Process answer and update scores
+
+@socketio.on('smack_talk')
+def handle_smack(data):
+    # Broadcast smack talk to game room
+```
+
+## UI/UX Design
+
+### Landing Page
+```
+┌─────────────────────────────┐
+│ Team Trivia                 │
+├─────────────────────────────┤
+│                             │
+│ [Host Login]                │
+│                             │
+│ -- or --                    │
+│                             │
+│ Join with PIN: [______]     │
+│                             │
+│ -- or --                    │
+│                             │
+│ Scan QR Code:               │
+│ ┌─────────┐                │
+│ │ QR Code │                │
+│ └─────────┘                │
+└─────────────────────────────┘
+```
+
+### Game Lobby
+```
+┌─────────────────────────────┐
+│ Team Trivia                 │
+├─────────────────────────────┤
+│                             │
+│   Game PIN: 123456          │
+│   ┌─────────┐              │
+│   │ QR Code │              │
+│   └─────────┘              │
+│                             │
+│   Players Connected: 5/12   │
+│   - Sarah                   │
+│   - Mike                    │
+│   - Alex                    │
+│   - Jamie                   │
+│   - Pat                     │
+│                             │
+│   [Start Game]              │
+└─────────────────────────────┘
+```
+
+### Question Display
+```
+┌─────────────────────────────┐
+│ Time: 15s     Score: 2300   │
+├─────────────────────────────┤
+│                             │
+│  What was announced in      │
+│  last week's all-hands?     │
+│                             │
+│  ┌───────┐      ┌───────┐  │
+│  │   A   │      │   B   │  │
+│  └───────┘      └───────┘  │
+│  ┌───────┐      ┌───────┐  │
+│  │   C   │      │   D   │  │
+│  └───────┘      └───────┘  │
+│                             │
+│  Players Answered: 8/12     │
+└─────────────────────────────┘
+```
+
+### Smack Talk Interface
+```
+┌─────────────────────────────┐
+│ Between Rounds              │
+├─────────────────────────────┤
+│                             │
+│  🏆 Current Leaders         │
+│  1. Sarah - 3200           │
+│  2. Mike  - 2950           │
+│  3. Alex  - 2800           │
+│                             │
+│  💬 Smack Talk             │
+│  Sarah: "Just warming up!"  │
+│  Mike: "Watch out round 2!" │
+│                             │
+│  [Send Message]             │
+│  [Next Round in: 10s]       │
+└─────────────────────────────┘
+```
+
+## Host Dashboard
+
+### Main Dashboard
+```
+┌─────────────────────────────────────────┐
+│ Host Dashboard                          │
+├─────────────────────────────────────────┤
+│                                         │
+│ Quick Actions        Recent Games       │
+│ [New Game]          • Marketing Quiz    │
+│ [Add Questions]     • All Hands Trivia  │
+│ [Question Bank]     • Team Social       │
+│                                         │
+│ Saved Question Sets   Active Games      │
+│ • Company Culture    None active        │
+│ • Tech Trivia                          │
+│ • Team Building                        │
+└─────────────────────────────────────────┘
+```
+
+### Game Creation
+```
+┌─────────────────────────────────────────┐
+│ Create New Game                         │
+├─────────────────────────────────────────┤
+│                                         │
+│ Game Name: [____________]               │
+│                                         │
+│ Question Sources:                       │
+│ [✓] Company Questions                   │
+│ [✓] General Knowledge                   │
+│ [✓] Sound Effects                       │
+│                                         │
+│ Settings:                               │
+│ Max Players: [12__]                     │
+│ Time per Q: [20s_]                     │
+│ Allow Smack Talk: [Yes]                │
+│                                         │
+│ [Generate Game PIN]                     │
+└─────────────────────────────────────────┘
+```
+
+### Active Game Control
+```
+┌─────────────────────────────────────────┐
+│ Game Control - PIN: 123456              │
+├─────────────────────────────────────────┤
+│                                         │
+│ Players (8/12)     Current Question     │
+│ • Sarah ✓          3 of 10             │
+│ • Mike ✓           Time: 15s           │
+│ • Alex ...                             │
+│                                         │
+│ Controls:                               │
+│ [Skip Question] [Pause] [End Game]      │
+│                                         │
+│ Next Up: "What was announced in..."     │
+└─────────────────────────────────────────┘
+```
+
+### Host Features
+1. Game Management
+   - Create new game sessions
+   - Generate unique game PINs
+   - Monitor active players
+   - Control game flow
+   - View real-time analytics
+
+2. Question Management
+   - Upload company documents for AI question generation
+   - Create custom questions
+   - Import questions from APIs
+   - Save question banks for reuse
+   - Tag questions by category/difficulty
+
+## UI Components
+
+### Key Elements
+1. Question Timer
+   - Circular countdown animation
+   - Color changes in final seconds
+   - Audible tick in last 5 seconds
+
+2. Answer Buttons
+   - Large, clickable areas
+   - Color-coded options (like Kahoot)
+   - Haptic feedback on mobile
+   - Shows correct/incorrect animation
+
+3. Score Display
+   - Real-time updates
+   - Animated score increases
+   - Bonus point notifications
+   - Streak indicators
+
+4. Player List
+   - Current rank
+   - Score
+   - Answer streak
+   - Recent smack talk
+
+### Color Scheme
+```css
+:root {
+  --primary: #4F46E5;    /* Indigo */
+  --success: #10B981;    /* Emerald */
+  --warning: #F59E0B;    /* Amber */
+  --danger: #EF4444;     /* Red */
+  --neutral: #6B7280;    /* Gray */
+  --background: #F3F4F6; /* Light gray */
+}
+```
+
+## Future Enhancements
+
+### 1. Team Modes
+```
+┌─────────────────────┐
+│    Team Battle      │
+│ Marketing vs Sales  │
+│    2500   1800     │
+└─────────────────────┘
+```
+- Split players into departments
+- Team-based scoring
+- Inter-team smack talk
+- Department leaderboards
+- Team victory animations
+
+### 2. Power-Ups
+- Double Points (next question)
+- Time Freeze (5 extra seconds)
+- 50/50 (remove two wrong answers)
+- Team Bonus (whole team gets points)
+- Save for critical moments!
+
+### 3. Custom Sound Effects
+- Upload company inside jokes
+- Record executive messages
+- Team celebration sounds
+- Custom victory themes
+- "Wrong answer" zingers
+
+### 4. Achievement System
+```
+🏆 Achievements Unlocked:
+- First Blood (First correct answer)
+- Perfect Round (All correct)
+- Comeback Kid (From last to podium)
+- Trash Talk Master (10 smack talks)
+```
+
+### 5. Question Templates
+- "Guess Who?" with employee photos
+- "Finish the Quote" from meetings
+- "Spot the Difference" in docs
+- "Name that Project" from specs
+- Historical company milestones
+
+### 6. Seasonal Events
+- Holiday themed questions
+- Quarterly review specials
+- Company anniversary editions
+- New hire welcome rounds
+- Department spotlight weeks
+
+### 7. Analytics Dashboard
+```
+┌─────────────────────┐
+│ Team Insights       │
+│ - Most active dept  │
+│ - Hardest questions │
+│ - Best trash talker │
+│ - Knowledge gaps    │
+└─────────────────────┘
+```
+
+### 8. Quick Rounds Mode
+- 5-minute lightning rounds
+- Rapid-fire questions
+- Double points
+- Perfect for short breaks
+- "Coffee Break Quiz"
+
+### 9. Social Features
+- Custom player cards
+- Shareable achievements
+- Challenge specific teams
+- Monthly tournaments
+- MVP highlights
+
+### 10. Integration Extensions
+- Teams status updates
+- Slack notifications
+- Calendar scheduling
+- Email summaries
+- Winner announcements
+
+## Security Considerations
+- JWT-based host authentication
+- PIN validation and rate limiting
+- Document handling privacy
+- API key management
+- WebSocket connection validation
+- Input sanitization
+- CORS configuration
+- Data encryption at rest
+- Secure session management
+
+## Development Priorities
+1. Host authentication system
+2. PIN-based game access
+3. Core WebSocket game engine
+4. Cosmos DB integration
+5. Question generation system
+6. Docker containerization
+7. Basic UI/UX
+8. QR code system
+
+## Project Timeline
+Phase 1 (MVP): [Timeline TBD]
+Phase 2 (Enhanced Features): [Timeline TBD]
+
+# Team Trivia Project Addendum
+
+## Microservices Architecture
+
+### Service Breakdown
+1. Authentication Service
+   - Host login/authentication
+   - PIN generation and validation
+   - Session management
+   ```python
+   # Example service structure
+   auth_service/
+     ├── api/
+     ├── tests/
+     ├── models/
+     └── Dockerfile
+   ```
+
+2. Game Service
+   - Game state management
+   - Real-time game logic
+   - WebSocket handling
+   ```python
+   game_service/
+     ├── api/
+     ├── tests/
+     ├── websocket/
+     └── Dockerfile
+   ```
+
+3. Question Service
+   - Question bank management
+   - API integrations (OpenTDB, Jservice, etc.)
+   - AI question generation
+   ```python
+   question_service/
+     ├── api/
+     ├── tests/
+     ├── generators/
+     └── Dockerfile
+   ```
+
+4. Player Service
+   - Player state management
+   - Scoring system
+   - Leaderboards
+   ```python
+   player_service/
+     ├── api/
+     ├── tests/
+     ├── scoring/
+     └── Dockerfile
+   ```
+
+### Inter-Service Communication
+```mermaid
+graph TD
+    A[Frontend] --> B[API Gateway]
+    B --> C[Auth Service]
+    B --> D[Game Service]
+    B --> E[Question Service]
+    B --> F[Player Service]
+    D <--> E
+    D <--> F
+```
+
+## Testing Strategy
+
+### Unit Testing
+Each service includes comprehensive unit tests:
+```python
+# Example test structure
+def test_pin_generation():
+    pin = generate_game_pin()
+    assert len(pin) == 6
+    assert pin.isdigit()
+
+def test_question_generation():
+    doc = "Sample company document"
+    questions = generate_questions(doc)
+    assert len(questions) >= 3
+```
+
+### Integration Testing
+```python
+# Example integration test
+def test_game_flow():
+    # Create game
+    game = create_game()
+    
+    # Add players
+    add_player(game.id, "Player1")
+    add_player(game.id, "Player2")
+    
+    # Start game
+    start_game(game.id)
+    
+    # Verify game state
+    assert get_game_state(game.id).status == "active"
+```
+
+### E2E Testing
+```python
+def test_complete_game_round():
+    # Host creates game
+    game_pin = create_game_session()
+    
+    # Players join
+    join_game(game_pin, "Player1")
+    join_game(game_pin, "Player2")
+    
+    # Complete round
+    submit_answer(game_pin, "Player1", "A")
+    submit_answer(game_pin, "Player2", "B")
+    
+    # Verify results
+    assert get_scores(game_pin)
+```
+
+## Documentation Standards
+
+### 1. Service Documentation
+Each service must maintain:
+- README.md with setup instructions
+- API documentation
+- Environment requirements
+- Testing guidelines
+
+### 2. API Documentation
+```yaml
+paths:
+  /game/{pin}:
+    get:
+      summary: Get game state
+      parameters:
+        - name: pin
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        200:
+          description: Game state retrieved
+```
+
+### 3. Change Documentation
+For each feature:
+- Update service README
+- Document API changes
+- Update test documentation
+- Add example usage
+
+### 4. Version Control Guidelines
+```bash
+# Branch naming
+feature/add-power-ups
+bugfix/socket-disconnect
+enhancement/smack-talk
+
+# Commit messages
+feat: Add power-up system
+fix: Handle websocket timeout
+docs: Update API documentation
+```
+
+## Development Workflow
+
+### 1. Feature Implementation
+```mermaid
+graph TD
+    A[Feature Branch] --> B[Unit Tests]
+    B --> C[Integration Tests]
+    C --> D[Documentation]
+    D --> E[PR Review]
+    E --> F[Merge]
+```
+
+### 2. Documentation Updates
+- Update project.md for major changes
+- Update service-specific docs
+- Update API documentation
+- Update test documentation
+
+### 3. Testing Requirements
+- Unit tests for new features
+- Integration tests for service interactions
+- E2E tests for critical paths
+- Performance tests for scalability
+
+## Context Recovery Guide
+
+### 1. Project Overview
+- Review project.md for full scope
+- Check service-specific READMEs
+- Review API documentation
+
+### 2. Current State
+- Check deployment status
+- Review active features
+- Check test coverage
+
+### 3. Next Steps
+- Review pending features
+- Check documentation needs
+- Review test requirements
+
+## Monitoring and Maintenance
+
+### 1. Service Health
+```python
+@app.route('/health')
+def health_check():
+    return {
+        'status': 'healthy',
+        'version': '1.0.0',
+        'dependencies': check_dependencies()
+    }
+```
+
+### 2. Documentation Health
+- Regular doc reviews
+- API documentation updates
+- Test coverage reports
+
+### 3. Performance Monitoring
+- Service response times
+- WebSocket connection stats
+- Database performance
+
+Remember: This addendum is a living document that should be updated as the project evolves. The AI agent should refer back to both project.md and this addendum to maintain context throughout development.
+
+# External Documentation References
+
+## Core Technologies
+
+### Python & Flask
+- Flask Documentation: https://flask.palletsprojects.com/
+- Flask-SocketIO: https://flask-socketio.readthedocs.io/
+- Python WebSockets: https://websockets.readthedocs.io/
+- JWT Authentication: https://pyjwt.readthedocs.io/
+
+### Frontend
+- React Documentation: https://react.dev/
+- TailwindCSS: https://tailwindcss.com/docs
+- React Socket.IO Client: https://socket.io/docs/v4/client-api/
+
+### Microsoft Azure
+- Cosmos DB Documentation: https://learn.microsoft.com/en-us/azure/cosmos-db/
+- Azure OpenAI Service: https://learn.microsoft.com/en-us/azure/ai-services/openai/
+- Azure Container Registry: https://learn.microsoft.com/en-us/azure/container-registry/
+
+### Docker & Deployment
+- Docker Documentation: https://docs.docker.com/
+- Docker Compose: https://docs.docker.com/compose/
+- Nginx Configuration: https://nginx.org/en/docs/
+
+## External APIs
+
+### Trivia Sources
+- OpenTDB API: https://opentdb.com/api_config.php
+- Jservice API: http://jservice.io/
+- The Trivia API: https://the-trivia-api.com/docs/
+
+### Media Content
+- Unsplash API: https://unsplash.com/documentation
+- Freesound API: https://freesound.org/docs/api/
+
+## Testing Frameworks
+- Python unittest: https://docs.python.org/3/library/unittest.html
+- pytest: https://docs.pytest.org/
+- Jest (for React): https://jestjs.io/docs/getting-started
+- WebSocket Testing: https://pytest-socket.readthedocs.io/
+
+## Development Tools
+- QR Code Generation: https://github.com/lincolnloop/python-qrcode
+- API Documentation (Swagger): https://swagger.io/docs/
+- Mermaid Diagrams: https://mermaid.js.org/intro/
+
+## Best Practices & Style Guides
+- Python PEP 8: https://peps.python.org/pep-0008/
+- React Best Practices: https://react.dev/learn/thinking-in-react
+- RESTful API Guidelines: https://github.com/microsoft/api-guidelines/blob/vNext/Guidelines.md
+- Microservices Architecture: https://microservices.io/patterns/index.html
+
+## Security References
+- OWASP WebSocket Security: https://owasp.org/www-project-web-security-testing-guide/v41/4-Web_Application_Security_Testing/11-Client_Side_Testing/10-Testing_WebSockets
+- JWT Security Best Practices: https://auth0.com/docs/secure/tokens/json-web-tokens/json-web-token-best-practices
+- API Security Checklist: https://github.com/shieldfy/API-Security-Checklist
+
+## Useful Tools & References
+- JSON Schema Validator: https://www.jsonschemavalidator.net/
+- WebSocket Testing Tool: https://websocket.org/echo.html
+- HTTP Status Codes: https://httpstatuses.com/
+
+Note: The AI agent should verify these links are current when using them and check for updated documentation versions. Some services might require registration or API keys - refer to the service documentation for current requirements.
+
+## Documentation Template Examples
+- API Documentation Template: https://github.com/jamescooke/restapidocs
+- Microservice Documentation: https://microservices.io/patterns/observability/service-documentation.html
+- Technical Writing Guide: https://www.writethedocs.org/guide/
+
+Remember to:
+1. Check documentation versions match our tech stack
+2. Verify API endpoints are current
+3. Review rate limits and usage terms
+4. Look for community resources and examples
+5. Consider fallback options if services are unavailable
