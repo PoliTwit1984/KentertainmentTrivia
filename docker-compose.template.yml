@@ -1,0 +1,47 @@
+version: "3.8"
+
+services:
+  auth_service:
+    build:
+      context: ./auth_service
+      dockerfile: Dockerfile
+    ports:
+      - "5001:5001"
+    environment:
+      - COSMOS_ENDPOINT=your_cosmos_endpoint
+      - COSMOS_KEY=your_cosmos_key
+      - PORT=5001
+    volumes:
+      - ./auth_service:/app
+      - ./shared:/app/shared
+
+  game_service:
+    build:
+      context: ./game_service
+      dockerfile: Dockerfile
+    ports:
+      - "5002:5002"
+    environment:
+      - COSMOS_ENDPOINT=your_cosmos_endpoint
+      - COSMOS_KEY=your_cosmos_key
+      - PORT=5002
+      - AUTH_SERVICE_URL=http://auth_service:5001
+    volumes:
+      - ./game_service:/app
+      - ./shared:/app/shared
+    depends_on:
+      - auth_service
+
+  question_service:
+    build:
+      context: ./question_service
+      dockerfile: Dockerfile
+    ports:
+      - "5003:5003"
+    environment:
+      - COSMOS_ENDPOINT=your_cosmos_endpoint
+      - COSMOS_KEY=your_cosmos_key
+      - PORT=5003
+    volumes:
+      - ./question_service:/app
+      - ./shared:/app/shared

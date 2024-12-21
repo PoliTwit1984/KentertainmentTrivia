@@ -1,0 +1,11 @@
+#!/bin/bash
+
+# Check if environment variables are set
+if [ -z "$COSMOS_ENDPOINT" ] || [ -z "$COSMOS_KEY" ]; then
+    echo "Error: Required environment variables COSMOS_ENDPOINT and COSMOS_KEY are not set"
+    echo "Please set these variables in your environment or .env file"
+    exit 1
+fi
+
+# Run the test script
+python test_database.py
